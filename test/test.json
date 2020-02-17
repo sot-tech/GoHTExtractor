@@ -1,0 +1,46 @@
+{
+	"baseurl": "http://onibaku.group",
+	"search": "/content/torrent/5119",
+	"actions": [
+		{
+			"action": "go",
+			"param": "/anime/catalog"
+		},
+		{
+			"action": "extract",
+			"param": "<p class=\"oni_catalog_info_name\">.*?<a .*?href=\"(?P<url>.*?)\".*?>"
+		},
+		{
+			"action": "store",
+			"param": ""
+		},
+		{
+			"action": "go",
+			"param": "${arg}"
+		},
+		{
+			"action": "findFirst",
+			"param": "<div class=\"release_torrent_butt\">.*?<a class=\"button button_black\" href=\"\\Q${search}\\E\">"
+		},
+		{
+			"action": "extract",
+			"param": "<div class=\"main_title\">.*?<span>(?P<name_ru>.*?)<\\/span>|<div id=\"release_main_data\">.*?<div class=\"release_reln\">.*?<span>(?P<name_en>.*?)<\\/span>.*?<\\/div>|<div class=\"release_reln\">.*?<span>Озвучка:<\\/span>.*?<span>(?P<voices>.*?)<\\/span>.*?<\\/div>|<div class=\"release_reln\">.*?<span>Тайминг:<\\/span>.*?<span>(?P<timers>.*?)<\\/span>.*?<\\/div>|<div id=\"release_main_poster\" style=\"background-image: url\\((?P<poster>.*?)\\)\".*?>"
+		},
+		{
+			"action": "store",
+			"param": ""
+		},
+		{
+			"action": "findAll",
+			"param": "(?i).*\\.jpg|.*\\.jpeg"
+		},
+		{
+			"action": "go",
+			"param": "${arg}"
+		},
+		{
+			"action": "store",
+			"param": "data."
+		}
+	]
+}

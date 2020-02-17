@@ -29,52 +29,46 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
-	"github.com/op/go-logging"
 	"io/ioutil"
-	"regexp"
+	"log"
 	"sot-te.ch/HTExtractor"
 )
 
-type Config struct{
+type Config struct {
 	Actions []HTExtractor.ExtractAction `json:"actions"`
-	BaseUrl string `json:"baseurl"`
+	BaseUrl string                      `json:"baseurl"`
+	Search  string                      `json:"search"`
 }
-
-var s = `drwx------ 1 sot  sot     168 окт 28 15:11  .adobe
-drwxrwxr-x 1 sot  sot       0 дек  6 09:39  .android
--rw-rw-r-- 1 sot  sot     561 дек 21  2018  .anyconnect
-drwxrwxr-x 1 sot  sot     792 янв  3  2019  .arduino15
-drwxrwxr-x 1 sot  sot     920 ноя 29 10:38  .audacity-data
--rw-rw-r-- 1 sot  sot      15 фев 15  2018  .bash_aliases`
-
-var r = `(?s)<div class="main_title">.*?<span>(?P<name>.*?)<\/span>|<div class="release_reln"><span>(?P<lat_name>.*?)<\/span><\/div>`
 
 func main() {
 	flag.Parse()
 	args := flag.Args()
-	logger := logging.MustGetLogger("main")
 	if len(args) == 0 {
-		logger.Fatal("config file not set")
+		log.Fatal("Config file not set")
 	}
 	confData, err := ioutil.ReadFile(args[0])
-	re := regexp.MustCompile(r)
-	groupNames := re.SubexpNames()
-	for matchNum, match := range re.FindAllSubmatch(confData, -1) {
-		for groupIdx, group := range match {
-			name := groupNames[groupIdx]
-			if name == "" {
-				name = "*"
-			}
-			fmt.Printf("#%d text: '%s', group: '%s'\n", matchNum, string(group), name)
-		}
-	}
 	if err == nil {
 		conf := new(Config)
 		if err = json.Unmarshal(confData, conf); err == nil {
-			ex := HTExtractor.New(conf.Actions)
-			ex.ExtractData(conf.BaseUrl, "")
+			ex := HTExtractor.New()
+			if err = ex.Compile(conf.Actions); err == nil {
+				var data map[string][]byte
+				data, err = ex.ExtractData(conf.BaseUrl, conf.Search)
+				if data != nil {
+					for k, v := range data {
+						var s string
+						if len(v) > 2048{
+							s = "LONG VALUE"
+						} else{
+							s = string(v)
+						}
+						log.Printf("%s: %s\n", k, s)
+					}
+				}
+			}
 		}
 	}
-	logger.Fatal(err)
+	if err != nil {
+		log.Fatal(err)
+	}
 }

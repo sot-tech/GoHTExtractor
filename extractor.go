@@ -29,227 +29,249 @@ package HTExtractor
 import (
 	"container/list"
 	"errors"
-	"github.com/op/go-logging"
 	"io/ioutil"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
-var logger = logging.MustGetLogger("sot-te.ch/HTExtractor")
-
 const (
-	actGo      = "go"
-	actExtract = "extract"
-	actFindAll = "findAll"
+	actGo        = "go"
+	actExtract   = "extract"
+	actFindAll   = "findAll"
 	actFindFirst = "findFirst"
-	actStore   = "store"
+	actStore     = "store"
 
-	paramSearch = "${search}"
-	paramArg    = "${arg}"
+	paramSearch   = "${search}"
+	paramArg      = "${arg}"
+	paramSelector = "${selector}"
 
 	httpProtoString = "http"
 )
 
+type EFunc func(string, string, []byte) error
+
 type ExtractAction struct {
-	Action string `json:"action"`
-	Param  string `json:"param"`
+	Action   string `json:"action"`
+	Param    string `json:"param"`
+	function EFunc  `json:"-"`
 }
 
 type Extractor struct {
-	functions       *list.List
-	currentFunction *list.Element
-	baseUrl         string
-	search          string
-	data            map[string][]byte
-	lastUrl         string
+	Actions           map[string]EFunc
+	functions         *list.List
+	currentFuncStruct *list.Element
+	baseUrl           string
+	search            string
+	data              map[string][]byte
+	stop              bool
 }
 
-func New(actions []ExtractAction) *Extractor {
-	ex := new(Extractor)
-	ex.functions = list.New()
-	for actIndex := len(actions) - 1; actIndex >= 0; actIndex-- {
-		action := actions[actIndex]
-		var currentFunc func(string, []byte)bool
-		switch action.Action {
-		case actGo:
-			currentFunc = func(selector string, paramBytes []byte)bool {
-				var nextFunc func(string, []byte)bool
-				var param string
-				if paramBytes != nil {
-					param = string(paramBytes)
-				}
-				if ex.currentFunction != nil {
-					ex.currentFunction = ex.currentFunction.Next()
-					if ex.currentFunction != nil {
-						nextFunc = ex.currentFunction.Value.(func(string, []byte)bool)
+func (ex *Extractor) NextFunc(selector string, paramBytes []byte) error {
+	var err error
+	var nextFunc EFunc
+	var nextFuncParam string
+	if ex.currentFuncStruct != nil {
+		ex.currentFuncStruct = ex.currentFuncStruct.Next()
+		if ex.currentFuncStruct != nil {
+			nextFuncStruct := ex.currentFuncStruct.Value.(ExtractAction)
+			nextFunc = nextFuncStruct.function
+			nextFuncParam = nextFuncStruct.Param
+		}
+	}
+	if nextFunc != nil {
+		if err = nextFunc(nextFuncParam, selector, paramBytes); err != nil {
+			ex.stop = true
+		}
+	}
+	return err
+}
+
+func (ex *Extractor) SetFunction(action string, function EFunc) (EFunc, error) {
+	if ex.Actions == nil {
+		ex.Actions = make(map[string]EFunc)
+	}
+	if function == nil {
+		return nil, errors.New("function cannot be nil")
+	} else {
+		prevFunction := ex.Actions[action]
+		ex.Actions[action] = function
+		return prevFunction, nil
+	}
+}
+
+func (ex *Extractor) goF(funcParam, selector string, paramBytes []byte) error {
+	var err error
+	var param string
+	if paramBytes != nil {
+		param = string(paramBytes)
+	}
+	context := strings.ReplaceAll(funcParam, paramArg, param)
+	context = strings.ReplaceAll(context, paramSelector, selector)
+	context = strings.ReplaceAll(context, paramSearch, ex.search)
+	if strings.Index(param, httpProtoString) != 0 {
+		context = ex.baseUrl + context
+	}
+	var resp *http.Response
+	if resp, err = http.Get(context); err == nil && resp != nil && resp.StatusCode < 400 {
+		var bytes []byte
+		if bytes, err = ioutil.ReadAll(resp.Body); err == nil {
+			err = ex.NextFunc(selector, bytes)
+		}
+	} else {
+		var errMsg string
+		if err != nil {
+			errMsg = err.Error()
+		} else if resp == nil {
+			errMsg = "empty response"
+		} else {
+			errMsg = resp.Status
+		}
+		err = errors.New(errMsg)
+		return err
+	}
+	return err
+}
+
+func (ex *Extractor) extractF(functionParam, selector string, param []byte) error {
+	var err error
+	if param == nil {
+		param = make([]byte, 0)
+	}
+	pattern := strings.ReplaceAll(functionParam, paramSearch, ex.search)
+	pattern = strings.ReplaceAll(pattern, paramSelector, selector)
+	var reg *regexp.Regexp
+	if reg, err = regexp.Compile("(?s)" + pattern); err == nil {
+		groupNames := reg.SubexpNames()
+		extracted := make(map[string][][]byte)
+		for _, match := range reg.FindAllSubmatch(param, -1) {
+			if match != nil && len(match) > 1 {
+				for groupIdx, group := range match[1:] {
+					groupIdx++
+					name := groupNames[groupIdx]
+					if name == "" {
+						name = strconv.FormatInt(int64(groupIdx), 10)
 					}
-				}
-				context := strings.ReplaceAll(action.Param, paramArg, param)
-				context = strings.ReplaceAll(context, paramSearch, ex.search)
-				if strings.Index(param, httpProtoString) != 0 {
-					context = ex.baseUrl + context
-				}
-				if resp, err := http.Get(context); err == nil && resp != nil && resp.StatusCode < 400 {
-					ex.lastUrl = context
-					if bytes, err := ioutil.ReadAll(resp.Body); err == nil {
-						if nextFunc != nil {
-							return nextFunc(selector, bytes)
+					if len(group) > 0 {
+						bytesa := extracted[name]
+						if bytesa == nil{
+							bytesa = make([][]byte, 0)
 						}
-					} else {
-						logger.Warningf("Read body error: %v", err)
-					}
-				} else {
-					var errMsg string
-					if err != nil {
-						errMsg = err.Error()
-					} else if resp == nil {
-						errMsg = "empty response"
-					} else {
-						errMsg = resp.Status
-					}
-					err = errors.New(errMsg)
-					logger.Warningf("HTTP error: %s", errMsg)
-				}
-				return false
-			}
-		case actExtract:
-			currentFunc = func(selector string, param []byte)bool {
-				var nextFunc func(string, []byte)bool
-				if ex.currentFunction != nil {
-					ex.currentFunction = ex.currentFunction.Next()
-					if ex.currentFunction != nil {
-						nextFunc = ex.currentFunction.Value.(func(string, []byte)bool)
+						extracted[name] = append(bytesa, group)
 					}
 				}
-				if param == nil {
-					param = make([]byte, 0)
-				}
-				pattern := strings.ReplaceAll(action.Param, paramSearch, ex.search)
-				if reg, err := regexp.Compile("(?s)" + pattern); err == nil {
-					//groupNames := reg.SubexpNames()
-					matches := reg.FindAllSubmatch(param, -1)
-					if matches != nil {
-						//TODO: selector
-						for _, match := range matches {
-							if match != nil && len(match) > 1 {
-								if nextFunc != nil {
-									tmpF := ex.currentFunction
-									if nextFunc("", match[1]) { //FIXME: HERE!
-										return true
-									}
-									ex.currentFunction = tmpF
-								}
-							}
-						}
-					}
-				} else {
-					logger.Warning(err)
-				}
-				return false
-			}
-		case actFindAll:
-			currentFunc = func(selector string, param []byte)bool {
-				var nextFunc func(string, []byte)bool
-				if ex.currentFunction != nil {
-					ex.currentFunction = ex.currentFunction.Next()
-					if ex.currentFunction != nil {
-						nextFunc = ex.currentFunction.Value.(func(string, []byte)bool)
-					}
-				}
-				if param == nil {
-					param = make([]byte, 0)
-				}
-				if action.Param == "" {
-					if len(param) > 0 && nextFunc != nil {
-						return nextFunc(selector, param)
-					}
-				} else {
-					pattern := strings.ReplaceAll(action.Param, paramSearch, ex.search)
-					if reg, err := regexp.Compile("(?s)" + pattern); err == nil {
-						if matches := reg.FindSubmatch(param); matches != nil && len(matches) > 0 {
-							if nextFunc != nil {
-								return nextFunc(selector, param)
-							}
-						}
-					} else {
-						logger.Warning(err)
-					}
-				}
-				return false
-			}
-		case actFindFirst:
-			currentFunc = func(selector string, param []byte)bool {
-				var nextFunc func(string, []byte)bool
-				if ex.currentFunction != nil {
-					ex.currentFunction = ex.currentFunction.Next()
-					if ex.currentFunction != nil {
-						nextFunc = ex.currentFunction.Value.(func(string, []byte)bool)
-					}
-				}
-				if param == nil {
-					param = make([]byte, 0)
-				}
-				if action.Param == "" {
-					if len(param) > 0 {
-						if nextFunc != nil {
-							nextFunc(selector, param)
-						}
-						return true
-					}
-				} else {
-					pattern := strings.ReplaceAll(action.Param, paramSearch, ex.search)
-					if reg, err := regexp.Compile("(?s)" + pattern); err == nil {
-						if matches := reg.FindSubmatch(param); matches != nil && len(matches) > 0 {
-							if nextFunc != nil {
-								nextFunc(selector, param)
-							}
-							return true
-						}
-					} else {
-						logger.Warning(err)
-					}
-				}
-				return false
-			}
-		case actStore:
-			currentFunc = func(selector string, param []byte)bool {
-				var nextFunc func(string, []byte)bool
-				if ex.currentFunction != nil {
-					ex.currentFunction = ex.currentFunction.Next()
-					if ex.currentFunction != nil {
-						nextFunc = ex.currentFunction.Value.(func(string, []byte)bool)
-					}
-				}
-				if ex.data == nil {
-					ex.data = make(map[string][]byte)
-				}
-				ex.data[selector] = param
-				if nextFunc != nil {
-					nextFunc(selector, param)
-				}
-				return false
 			}
 		}
-		ex.functions.PushFront(currentFunc)
+		for k, va := range extracted {
+			if va != nil {
+				for _, v := range va {
+					if ex.stop {
+						break
+					}
+					tmpF := ex.currentFuncStruct
+					if err = ex.NextFunc(k, v); err != nil {
+						ex.stop = true
+					}
+					ex.currentFuncStruct = tmpF
+				}
+			}
+		}
+
+	} else {
+		ex.stop = true
+	}
+	return err
+}
+
+func (ex *Extractor) findF(functionParam, selector string, param []byte, breakIfFound bool) error {
+	var err error
+	if param == nil {
+		param = make([]byte, 0)
+	}
+	if functionParam == "" {
+		if len(param) > 0 {
+			err = ex.NextFunc(selector, param)
+			if breakIfFound {
+				ex.stop = true
+			}
+		}
+	} else {
+		pattern := strings.ReplaceAll(functionParam, paramSearch, ex.search)
+		pattern = strings.ReplaceAll(pattern, paramSelector, selector)
+		var reg *regexp.Regexp
+		if reg, err = regexp.Compile("(?s)" + pattern); err == nil {
+			if matches := reg.FindSubmatch(param); matches != nil && len(matches) > 0 {
+				err = ex.NextFunc(selector, param)
+				if breakIfFound {
+					ex.stop = true
+				}
+			}
+		}
+	}
+	return err
+}
+
+func (ex *Extractor) findAllF(functionParam, selector string, param []byte) error {
+	return ex.findF(functionParam, selector, param, false)
+}
+
+func (ex *Extractor) findFirstF(functionParam, selector string, param []byte) error {
+	return ex.findF(functionParam, selector, param, true)
+}
+
+func (ex *Extractor) storeF(functionParam, selector string, param []byte) error {
+	if ex.data == nil {
+		ex.data = make(map[string][]byte)
+	}
+	ex.data[functionParam + selector] = param
+	return ex.NextFunc(selector, param)
+}
+
+func New() *Extractor {
+	ex := new(Extractor)
+	ex.Actions = map[string]EFunc{
+		actGo:        ex.goF,
+		actExtract:   ex.extractF,
+		actFindAll:   ex.findAllF,
+		actFindFirst: ex.findFirstF,
+		actStore:     ex.storeF,
 	}
 	return ex
 }
 
-func (ex *Extractor) ExtractData(baseUrl string, search string) (map[string][]byte, string) {
-	var res map[string][]byte
-	var lastUrl string
-	if ex.functions != nil && ex.functions.Len() > 0 {
-		ext := Extractor{
-			functions:       ex.functions,
-			currentFunction: ex.functions.Front(),
-			baseUrl:         baseUrl,
-			search:          search,
-			data:            make(map[string][]byte),
-			lastUrl:         "",
+func (ex *Extractor) Compile(actions []ExtractAction) error {
+	var err error
+	ex.functions = list.New()
+	for actIndex := len(actions) - 1; actIndex >= 0; actIndex-- {
+		action := actions[actIndex]
+		if currentFunc := ex.Actions[action.Action]; currentFunc == nil {
+			err = errors.New("function for action '" + action.Action + "' not set")
+			break
+		} else {
+			action.function = currentFunc
+			ex.functions.PushFront(action)
 		}
-		ext.currentFunction.Value.(func(string, []byte))("", nil)
-		res, lastUrl = ext.data, ext.lastUrl
 	}
-	return res, lastUrl
+	return err
+}
+
+func (ex *Extractor) ExtractData(baseUrl string, search string) (map[string][]byte, error) {
+	var err error
+	var res map[string][]byte
+	if ex.functions != nil && ex.functions.Len() > 0 {
+		ex.currentFuncStruct = ex.functions.Front()
+		ex.baseUrl = baseUrl
+		ex.search = search
+		ex.data = make(map[string][]byte)
+		ex.stop = false
+		if ex.currentFuncStruct != nil {
+			funcStruct := ex.currentFuncStruct.Value.(ExtractAction)
+			if funcStruct.function != nil {
+				err = funcStruct.function(funcStruct.Param, "", nil)
+			}
+		}
+		res = ex.data
+	}
+	return res, err
 }
