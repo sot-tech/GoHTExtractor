@@ -1,14 +1,14 @@
 {
 	"baseurl": "http://onibaku.group",
-	"search": "/content/torrent/5119",
+	"search": "/content/torrent/991",
 	"actions": [
 		{
 			"action": "go",
-			"param": "/anime/catalog"
+			"param": "/search/index.php?q=steins%3Bgate&s=Поиск"
 		},
 		{
 			"action": "extract",
-			"param": "<p class=\"oni_catalog_info_name\">.*?<a .*?href=\"(?P<url>.*?)\".*?>"
+			"param": "<p class=\"oni_search_info_name\">.*?<a .*?href=\"(?P<url>.*?)\".*?>"
 		},
 		{
 			"action": "store",
