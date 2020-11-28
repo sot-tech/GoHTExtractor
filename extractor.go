@@ -256,7 +256,7 @@ func (ex *Extractor) Compile(actions []ExtractAction) error {
 	return err
 }
 
-func (ex *Extractor) ExtractData(baseUrl string, search string) (map[string][]byte, error) {
+func (ex *Extractor) ExtractDataWithSelector(baseUrl, search, initSelector string) (map[string][]byte, error){
 	var err error
 	var res map[string][]byte
 	if ex.functions != nil && ex.functions.Len() > 0 {
@@ -268,10 +268,14 @@ func (ex *Extractor) ExtractData(baseUrl string, search string) (map[string][]by
 		if ex.currentFuncStruct != nil {
 			funcStruct := ex.currentFuncStruct.Value.(ExtractAction)
 			if funcStruct.function != nil {
-				err = funcStruct.function(funcStruct.Param, "", nil)
+				err = funcStruct.function(funcStruct.Param, initSelector, nil)
 			}
 		}
 		res = ex.data
 	}
 	return res, err
+}
+
+func (ex *Extractor) ExtractData(baseUrl, search string) (map[string][]byte, error) {
+	return ex.ExtractDataWithSelector(baseUrl, search, "")
 }
