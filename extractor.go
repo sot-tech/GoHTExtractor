@@ -55,11 +55,14 @@ type EFunc func(string, string, []byte) error
 type ExtractAction struct {
 	Action   string `json:"action"`
 	Param    string `json:"param"`
-	function EFunc  `json:"-"`
+	function EFunc
 }
 
 type Extractor struct {
 	Actions           map[string]EFunc
+	StackLimit        uint64
+	IterationLimit    uint64
+	stackLevel        uint64
 	functions         *list.List
 	currentFuncStruct *list.Element
 	baseUrl           string
@@ -70,20 +73,24 @@ type Extractor struct {
 
 func (ex *Extractor) NextFunc(selector string, paramBytes []byte) error {
 	var err error
-	var nextFunc EFunc
-	var nextFuncParam string
-	if ex.currentFuncStruct != nil {
-		ex.currentFuncStruct = ex.currentFuncStruct.Next()
+	if ex.StackLimit == 0 || ex.stackLevel < ex.StackLimit {
+		var nextFunc EFunc
+		var nextFuncParam string
 		if ex.currentFuncStruct != nil {
-			nextFuncStruct := ex.currentFuncStruct.Value.(ExtractAction)
-			nextFunc = nextFuncStruct.function
-			nextFuncParam = nextFuncStruct.Param
+			ex.currentFuncStruct = ex.currentFuncStruct.Next()
+			if ex.currentFuncStruct != nil {
+				nextFuncStruct := ex.currentFuncStruct.Value.(ExtractAction)
+				nextFunc = nextFuncStruct.function
+				nextFuncParam = nextFuncStruct.Param
+			}
 		}
-	}
-	if nextFunc != nil {
-		if err = nextFunc(nextFuncParam, selector, paramBytes); err != nil {
-			ex.stop = true
+		if nextFunc != nil {
+			if err = nextFunc(nextFuncParam, selector, paramBytes); err != nil {
+				ex.stop = true
+			}
 		}
+	} else {
+		err = errors.New("stack limit reached: " + strconv.FormatUint(ex.stackLevel, 10))
 	}
 	return err
 }
@@ -114,22 +121,17 @@ func (ex *Extractor) goF(funcParam, selector string, paramBytes []byte) error {
 		context = ex.baseUrl + context
 	}
 	var resp *http.Response
-	if resp, err = http.Get(context); err == nil && resp != nil && resp.StatusCode < 400 {
-		var bytes []byte
-		if bytes, err = ioutil.ReadAll(resp.Body); err == nil {
-			err = ex.NextFunc(selector, bytes)
-		}
-	} else {
-		var errMsg string
-		if err != nil {
-			errMsg = err.Error()
-		} else if resp == nil {
-			errMsg = "empty response"
+	if resp, err = http.Get(context); err == nil {
+		resp.Close = true
+		defer resp.Body.Close()
+		if resp.StatusCode < 400 {
+			var bytes []byte
+			if bytes, err = ioutil.ReadAll(resp.Body); err == nil {
+				err = ex.NextFunc(selector, bytes)
+			}
 		} else {
-			errMsg = resp.Status
+			err = errors.New("url " + context + " HTTP code: " + resp.Status)
 		}
-		err = errors.New(errMsg)
-		return err
 	}
 	return err
 }
@@ -155,7 +157,7 @@ func (ex *Extractor) extractF(functionParam, selector string, param []byte) erro
 					}
 					if len(group) > 0 {
 						bytesa := extracted[name]
-						if bytesa == nil{
+						if bytesa == nil {
 							bytesa = make([][]byte, 0)
 						}
 						extracted[name] = append(bytesa, group)
@@ -163,17 +165,23 @@ func (ex *Extractor) extractF(functionParam, selector string, param []byte) erro
 				}
 			}
 		}
+		var i uint64 = 0
 		for k, va := range extracted {
 			if va != nil {
 				for _, v := range va {
 					if ex.stop {
 						break
 					}
-					tmpF := ex.currentFuncStruct
-					if err = ex.NextFunc(k, v); err != nil {
-						ex.stop = true
+					if ex.IterationLimit == 0 || i < ex.IterationLimit {
+						tmpF := ex.currentFuncStruct
+						if err = ex.NextFunc(k, v); err != nil {
+							ex.stop = true
+						}
+						ex.currentFuncStruct = tmpF
+						i++
+					} else{
+						return errors.New("iteration limit reached: " + strconv.FormatUint(i, 10))
 					}
-					ex.currentFuncStruct = tmpF
 				}
 			}
 		}
@@ -224,7 +232,7 @@ func (ex *Extractor) storeF(functionParam, selector string, param []byte) error 
 	if ex.data == nil {
 		ex.data = make(map[string][]byte)
 	}
-	ex.data[functionParam + selector] = param
+	ex.data[functionParam+selector] = param
 	return ex.NextFunc(selector, param)
 }
 
@@ -256,7 +264,7 @@ func (ex *Extractor) Compile(actions []ExtractAction) error {
 	return err
 }
 
-func (ex *Extractor) ExtractDataWithSelector(baseUrl, search, initSelector string) (map[string][]byte, error){
+func (ex *Extractor) ExtractDataWithSelector(baseUrl, search, initSelector string) (map[string][]byte, error) {
 	var err error
 	var res map[string][]byte
 	if ex.functions != nil && ex.functions.Len() > 0 {
@@ -265,6 +273,7 @@ func (ex *Extractor) ExtractDataWithSelector(baseUrl, search, initSelector strin
 		ex.search = search
 		ex.data = make(map[string][]byte)
 		ex.stop = false
+		ex.stackLevel = 0
 		if ex.currentFuncStruct != nil {
 			funcStruct := ex.currentFuncStruct.Value.(ExtractAction)
 			if funcStruct.function != nil {
@@ -272,6 +281,7 @@ func (ex *Extractor) ExtractDataWithSelector(baseUrl, search, initSelector strin
 			}
 		}
 		res = ex.data
+		ex.data = nil
 	}
 	return res, err
 }

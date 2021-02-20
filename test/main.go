@@ -35,9 +35,11 @@ import (
 )
 
 type Config struct {
-	Actions []HTExtractor.ExtractAction `json:"actions"`
-	BaseUrl string                      `json:"baseurl"`
-	Search  string                      `json:"search"`
+	Actions        []HTExtractor.ExtractAction `json:"actions"`
+	StackLimit     uint64                      `json:"stackLimit"`
+	IterationLimit uint64                      `json:"iterationLimit"`
+	BaseUrl        string                      `json:"baseurl"`
+	Search         string                      `json:"search"`
 }
 
 func main() {
@@ -51,15 +53,17 @@ func main() {
 		conf := new(Config)
 		if err = json.Unmarshal(confData, conf); err == nil {
 			ex := HTExtractor.New()
+			ex.StackLimit = conf.StackLimit
+			ex.IterationLimit = conf.IterationLimit
 			if err = ex.Compile(conf.Actions); err == nil {
 				var data map[string][]byte
 				data, err = ex.ExtractData(conf.BaseUrl, conf.Search)
 				if data != nil {
 					for k, v := range data {
 						var s string
-						if len(v) > 2048{
+						if len(v) > 2048 {
 							s = "LONG VALUE"
-						} else{
+						} else {
 							s = string(v)
 						}
 						log.Printf("%s: %s\n", k, s)
