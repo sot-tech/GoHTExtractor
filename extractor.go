@@ -148,7 +148,7 @@ func (ex *Extractor) extractF(functionParam, selector string, param []byte) erro
 		groupNames := reg.SubexpNames()
 		extracted := make(map[string][][]byte)
 		for _, match := range reg.FindAllSubmatch(param, -1) {
-			if match != nil && len(match) > 1 {
+			if len(match) > 1 {
 				for groupIdx, group := range match[1:] {
 					groupIdx++
 					name := groupNames[groupIdx]
@@ -167,21 +167,19 @@ func (ex *Extractor) extractF(functionParam, selector string, param []byte) erro
 		}
 		var i uint64 = 0
 		for k, va := range extracted {
-			if va != nil {
-				for _, v := range va {
-					if ex.stop {
-						break
+			for _, v := range va {
+				if ex.stop {
+					break
+				}
+				if ex.IterationLimit == 0 || i < ex.IterationLimit {
+					tmpF := ex.currentFuncStruct
+					if err = ex.NextFunc(k, v); err != nil {
+						ex.stop = true
 					}
-					if ex.IterationLimit == 0 || i < ex.IterationLimit {
-						tmpF := ex.currentFuncStruct
-						if err = ex.NextFunc(k, v); err != nil {
-							ex.stop = true
-						}
-						ex.currentFuncStruct = tmpF
-						i++
-					} else{
-						return errors.New("iteration limit reached: " + strconv.FormatUint(i, 10))
-					}
+					ex.currentFuncStruct = tmpF
+					i++
+				} else {
+					return errors.New("iteration limit reached: " + strconv.FormatUint(i, 10))
 				}
 			}
 		}
@@ -209,7 +207,7 @@ func (ex *Extractor) findF(functionParam, selector string, param []byte, breakIf
 		pattern = strings.ReplaceAll(pattern, paramSelector, selector)
 		var reg *regexp.Regexp
 		if reg, err = regexp.Compile("(?s)" + pattern); err == nil {
-			if matches := reg.FindSubmatch(param); matches != nil && len(matches) > 0 {
+			if matches := reg.FindSubmatch(param); len(matches) > 0 {
 				err = ex.NextFunc(selector, param)
 				if breakIfFound {
 					ex.stop = true

@@ -31,6 +31,7 @@ import (
 	"flag"
 	"io/ioutil"
 	"log"
+
 	"sot-te.ch/HTExtractor"
 )
 
@@ -58,16 +59,14 @@ func main() {
 			if err = ex.Compile(conf.Actions); err == nil {
 				var data map[string][]byte
 				data, err = ex.ExtractData(conf.BaseUrl, conf.Search)
-				if data != nil {
-					for k, v := range data {
-						var s string
-						if len(v) > 2048 {
-							s = "LONG VALUE"
-						} else {
-							s = string(v)
-						}
-						log.Printf("%s: %s\n", k, s)
+				for k, v := range data {
+					var s string
+					if len(v) > 2048 {
+						s = "LONG VALUE"
+					} else {
+						s = string(v)
 					}
+					log.Printf("%s: %s\n", k, s)
 				}
 			}
 		}
